@@ -1,0 +1,38 @@
+# Ignore environment files
+.env
+.env.*
+
+# Ignore Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignore database backup and dump files
+*.sql
+*.dump
+*.bak
+*.backup
+*.sqlite3
+*.db
+
+# Ignore log files
+*.log
+
+# Ignore OS generated files
+.DS_Store
+Thumbs.db
+
+# Ignore editor/project files
+.vscode/
+.idea/
+*.suo
+*.user
+*.userprefs
+*.swp
+*.tmp
+
+# Ignore generated archives and packages
+*.zip
+*.tar.gz
+*.rar
+*.7z
