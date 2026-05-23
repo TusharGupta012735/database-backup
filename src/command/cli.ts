@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 import dotenv from "dotenv";
-import { intro, outro, text } from "@clack/prompts";
+import { intro, outro } from "@clack/prompts";
 import pc from "picocolors";
-import * as fs from "fs/promises";
-import * as path from "path";
 
 import { databasePackages } from "../constants/databasePackages";
 import { downloadDependecies } from "../helper/downloadDependecies";
@@ -17,7 +15,7 @@ import { saveBackup } from "../helper/saveBackup";
 
 dotenv.config();
 
-async function cli() {
+async function backupCommand() {
   intro(pc.cyan("Backup my database"));
 
   // get database name
@@ -52,4 +50,4 @@ async function cli() {
   process.exit(1);
 }
 
-export default cli;
+export default backupCommand;
