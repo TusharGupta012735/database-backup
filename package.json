@@ -4,7 +4,8 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "backup": "npx tsx src/index.ts backup"
+    "backup": "npx tsx src/index.ts backup",
+    "restore": "npx tsx src/index.ts restore"
   },
   "type": "module",
   "keywords": [],
