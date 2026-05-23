@@ -10,6 +10,10 @@ import { downloadDependecies } from "../helper/downloadDependecies";
 import { connectPostgres } from "../connection/postgres";
 import { getDatabaseName } from "../helper/getDatabaseName";
 import { getConnectionString } from "../helper/getConnectionString";
+import { getTableName } from "../helper/getTableName";
+import { getTableData } from "../helper/getTableData";
+import { getDirectoryPath } from "../helper/getDirectory";
+import { saveBackup } from "../helper/saveBackup";
 
 dotenv.config();
 
@@ -31,47 +35,18 @@ async function cli() {
   }
 
   // ask for table name to backup
-  const tableName = await text({
-    message: "Enter table name to backup",
-    validate(value) {
-      if (value!.length == 0) {
-        console.log(pc.redBright("Table name is required !"));
-        process.exit(0);
-      }
-      // check if table name exist in db
-    },
-  });
+  const tableName = await getTableName()
+
+  // fetch data from db
   console.log(pc.blueBright("Fetching data from database"));
-  const res = await client!.query(`Select * from ${tableName as string}`);
-
-  if (!res.rows[0]) {
-    console.log(pc.redBright("No data found or database is empty"));
-    process.exit(0);
-  }
-
-  const data = res.rows;
+  const data = await getTableData(client!, tableName)
   // verify if table exist
 
   // ask location to save data at
-  const dir = await text({
-    message: "Enter absolute directory of the path to create backup",
-    validate(path) {
-      if (path?.length == 0) {
-        console.log(pc.redBright("Path should not be empty"));
-        process.exit(0);
-      }
-    },
-  });
+  const dir = await getDirectoryPath()
 
-  const filePath = path.join(
-    dir as string,
-    `backup_${tableName as string}.json`,
-  );
-
-  await fs.mkdir(dir as string, { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
-
-  console.log(pc.greenBright("Backup saved successfully"));
+  // save backup
+  await saveBackup(dir, tableName, data)
 
   outro("Backup Completed");
   process.exit(1);
