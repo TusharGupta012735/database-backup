@@ -1,15 +1,23 @@
 # Database Backup Tool
 
-A small CLI utility for creating JSON backups of database tables and preparing for restore flows. The project is currently focused on **PostgreSQL**, with placeholders for MongoDB and Cassandra support in the future.
+### Project URL :
+https://roadmap.sh/projects/database-backup-utility
+
+A small CLI utility for backing up and restoring table data as JSON. The project is currently focused on **PostgreSQL**, with placeholders for MongoDB and Cassandra support in the future.
+
+## Repository
+
+- GitHub: https://github.com/TusharGupta012735/database-backup.git
 
 ## Overview
 
 This tool helps you:
 
-- Select a database type from the CLI
-- Ask for a PostgreSQL connection string
+- Select the database type from the CLI
+- Enter a PostgreSQL connection string
 - Choose a table to export
-- Pick a directory where the backup JSON file will be saved
+- Choose the directory where the backup JSON file should be saved
+- Restore JSON backup data back into PostgreSQL
 
 The current implementation stores table rows as a JSON array and uses the `pg` driver to connect to PostgreSQL.
 
@@ -18,19 +26,21 @@ The current implementation stores table rows as a JSON array and uses the `pg` d
 ### Working today
 
 - Backup flow for **PostgreSQL**
+- Restore flow for **PostgreSQL**
 - Interactive CLI prompts using `@clack/prompts`
-- JSON file creation in a chosen directory
+- JSON file creation and restore execution
 
-### Not fully implemented yet
+### Still planned / future work
 
-- Restore flow is **not complete** yet. The current restore command reads the backup file path and parses JSON, but it does not yet insert the data back into the database.
-- MongoDB and Cassandra are listed as selectable options, but there is **no working connection code** for those databases yet.
+- MongoDB and Cassandra are listed as selectable options, but their connection and restore logic are not implemented yet
+- `fs-extra` is currently unused
+- `.env` support is not yet wired into the restore flow
 
 ## Project structure
 
 - `src/index.ts` – CLI entry point and command registration
 - `src/command/backupCommand.ts` – backup workflow
-- `src/command/restoreCommand.ts` – restore workflow (currently partial)
+- `src/command/restoreCommand.ts` – restore workflow
 - `src/connection/postgres.ts` – PostgreSQL connection logic
 - `src/helper/*.ts` – prompt helpers, directory selection, file writing, and database-specific utilities
 - `src/constants/*.ts` – database list and package mappings
@@ -39,12 +49,12 @@ The current implementation stores table rows as a JSON array and uses the `pg` d
 
 ### Runtime dependencies
 
-- `@clack/prompts` – interactive command-line prompts
+- `@clack/prompts` – interactive CLI prompts
 - `dotenv` – loads environment variables from `.env`
 - `execa` – runs shell commands such as `npm install`
-- `fs-extra` – not currently used in the active backup/restore flow
+- `fs-extra` – present in the package but not currently used by the active logic
 - `pg` – PostgreSQL client driver
-- `picocolors` – colored CLI output
+- `picocolors` – colored terminal output
 - `typescript` – TypeScript compiler
 - `yargs` – CLI command parsing
 
@@ -63,19 +73,13 @@ The current implementation stores table rows as a JSON array and uses the `pg` d
    npm install
    ```
 
-2. Create a `.env` file if you want to store environment variables for future enhancement:
-
-   ```env
-   PG_CONNECTION_STRING=postgres://user:password@host:5432/dbname
-   ```
-
-3. Run the backup command:
+2. Run the backup command:
 
    ```bash
    npm run backup
    ```
 
-4. Run the restore command:
+3. Run the restore command:
 
    ```bash
    npm run restore
@@ -159,42 +163,44 @@ The file contains a JSON array of rows. For example:
 ]
 ```
 
-## How restore is planned to work
+## How the restore flow works
 
-The current restore entry point is present in `src/command/restoreCommand.ts`, but it is **not yet fully implemented**.
+The restore flow is now implemented in `src/command/restoreCommand.ts`.
 
-The intended restore flow is:
+### Restore steps
 
 1. Ask the user to select the database
-2. Ask for the connection string
-3. Connect to the database
-4. Ask for the backup file path
-5. Read and parse the JSON
-6. Restore the rows into the target table
-7. Report success or failure
+2. Download database-specific dependencies
+3. Ask for the PostgreSQL connection string
+4. Connect to PostgreSQL
+5. Ask for the backup file path
+6. Read and parse the JSON backup file
+7. Validate that the data is not empty
+8. For each row:
+   - build an `INSERT ... ON CONFLICT (user_id) DO UPDATE` query
+   - insert the row values into the target table
+9. Close the PostgreSQL client
+10. Print a success message
 
-### Planned Postgres restore behavior
+### Restore behavior
 
-For PostgreSQL, the restore flow should:
+For PostgreSQL, the current restore logic:
 
-- validate the backup file format
-- reconnect to the selected database
-- insert each row back into the original table
-- optionally support safe restore options such as:
-  - truncate before insert
-  - skip duplicates
-  - use transactions for atomicity
+- uses `user_id` as the conflict target
+- updates all fields except `user_id`
+- performs one insert/update per row in the backup file
+- restores data into the table entered by the user during the prompt
 
-### Important note about current implementation
+### Example restore logic
 
-At the moment, the restore command only:
-
-- asks for the database
-- connects to PostgreSQL
-- asks for a backup file path
-- parses the JSON payload
-
-It does **not** yet perform the actual database insert step.
+```sql
+INSERT INTO <table_name> (columns...)
+VALUES (...)
+ON CONFLICT (user_id)
+DO UPDATE SET
+  column_a = EXCLUDED.column_a,
+  column_b = EXCLUDED.column_b
+```
 
 ## Connection and storage details
 
@@ -206,7 +212,7 @@ The current connection flow uses:
 - `connectionString` from user input
 - `ssl.rejectUnauthorized = false`
 
-That means the tool currently assumes a PostgreSQL connection string is available and does not use `.env` automatically during restore.
+This means the tool currently expects a valid PostgreSQL connection string and does not yet use `.env` automatically for restore connection setup.
 
 ### Backup storage format
 
@@ -214,9 +220,9 @@ Backups are written as JSON files, not SQL dumps.
 
 This makes the data easy to inspect, copy, and move, but it also means:
 
-- restore logic must be implemented carefully
-- database-specific insert behavior is required
-- schema and column compatibility must be checked by the caller
+- restore logic must understand the JSON shape
+- insert behavior must match the target table schema
+- the caller must ensure the backup matches the destination table structure
 
 ## Support for future databases
 
@@ -241,20 +247,20 @@ A clean future design would be:
 
 ## Current limitations
 
-- Only PostgreSQL backup flow is working
-- Restore is incomplete
 - `fs-extra` is present in `package.json` but not used in the current code
-- `dotenv` is loaded in backup flow only
+- `.env` is not yet used automatically for restore connection setup
 - `MongoDB` and `Cassandra` are not functionally implemented yet
+- The restore conflict target is currently hardcoded to `user_id`
 
 ## Suggested next improvements
 
-1. Finish the restore implementation for PostgreSQL
-2. Add proper validation for table existence and file path input
-3. Add connection configuration through `.env`
-4. Implement database adapters for MongoDB and Cassandra
-5. Add a metadata header to each backup file (source DB, table, timestamp, row count)
-6. Add tests for backup and restore behavior
+1. Add a proper `.env`-based connection configuration flow
+2. Add table existence validation before restore
+3. Add file validation for backup JSON structure
+4. Add transaction handling for safer restores
+5. Implement database adapters for MongoDB and Cassandra
+6. Add a metadata header to each backup file (source DB, table, timestamp, row count)
+7. Add tests for backup and restore behavior
 
 ## Example workflow
 
@@ -278,14 +284,15 @@ CLI flow:
 npm run restore
 ```
 
-Current behavior:
+CLI flow:
 
 1. Select `Postgres`
-2. Enter the PostgreSQL connection string
+2. Enter your PostgreSQL connection string
 3. Enter the backup file path
-4. The JSON is parsed
-5. No insert is performed yet
+4. Enter the target table name
+5. The tool parses the JSON and restores the rows
+6. The tool prints `Database restored succesfully`
 
 ## Notes
 
-This project is currently designed for **PostgreSQL only**, and the codebase is already structured to expand toward other databases in the future. The documentation above reflects the current implementation and the planned restore path.
+This project is currently designed for **PostgreSQL only**, and the codebase is already structured to expand toward other databases in the future. The restore flow is now active for PostgreSQL, while the future database support remains a planned extension.

@@ -2,7 +2,7 @@
 .env
 .env.*
 backup
-
+prompt.md
 # Ignore Python bytecode and caches
 __pycache__/
 *.py[cod]
