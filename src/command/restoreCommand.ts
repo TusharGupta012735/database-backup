@@ -8,6 +8,7 @@ import { downloadDependecies } from "../helper/downloadDependecies";
 import { connectPostgres } from "../connection/postgres";
 import { getDatabaseName } from "../helper/getDatabaseName";
 import { getConnectionString } from "../helper/getConnectionString";
+import { getTableName } from "../helper/getTableName";
 
 export async function restoreCommand() {
   intro(pc.cyan("Restore the database"));
@@ -38,10 +39,41 @@ export async function restoreCommand() {
     }
   })
 
+  const tableName = await getTableName();
+
   // read file and parse data to json
   const rawData = await fs.readFile(fileDir as string, "utf-8")
   const records = JSON.parse(rawData);
 
-  
+  // iterate every record and update if required or insert if not present
+  if(records == null || records.length == 0){
+    console.log(pc.redBright("Data is empty"))
+    process.exit(0)
+  }
 
+  for(const record of records){
+    const columns = Object.keys(record)
+    const values = Object.values(record)
+
+    const placeholders = columns.map((_,i) => `$${i+1}`)
+
+    const updateClause = columns
+    .filter((col) => col !== "user_id")
+    .map((col) => `${col} = EXCLUDED.${col}`)
+    .join(",")
+
+    const query = `
+    Insert into ${tableName}
+    (${columns.join(",")})
+    VALUES (${placeholders.join(",")})
+    ON CONFLICT (user_id)
+    DO UPDATE SET
+    ${updateClause}
+    `;
+
+    await client.query(query, values)
+  }
+
+  console.log(pc.greenBright("Database restored succesfully"))
+  await client.end()
 }
