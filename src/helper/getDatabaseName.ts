@@ -9,5 +9,5 @@ export async function getDatabaseName() {
   });
   cancelCheck(databaseName);
 
-  return databaseName;
+  return databaseName as string;
 }

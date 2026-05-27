@@ -5,13 +5,12 @@ import pc from "picocolors";
 
 import { databasePackages } from "../constants/databasePackages";
 import { downloadDependecies } from "../helper/downloadDependecies";
-import { connectPostgres } from "../connection/postgres";
 import { getDatabaseName } from "../helper/getDatabaseName";
-import { getConnectionString } from "../helper/getConnectionString";
 import { getTableName } from "../helper/getTableName";
 import { getTableData } from "../helper/getTableData";
 import { getDirectoryPath } from "../helper/getDirectory";
 import { saveBackup } from "../helper/saveBackup";
+import { establishConnection } from "../components/establishConnection";
 
 dotenv.config();
 
@@ -21,30 +20,26 @@ async function backupCommand() {
   // get database name
   const databaseName = await getDatabaseName();
 
+  // establish connection
+  const client = await establishConnection(databaseName);
+
   // download dependency packages
   const packages = databasePackages[databaseName as string];
   await downloadDependecies(packages);
 
-  // establish a connection
-  const connectionString = await getConnectionString();
-  const client = await connectPostgres(connectionString);
-  if (client == null) {
-    console.log(pc.redBright("Error connecting to Database"));
-  }
-
   // ask for table name to backup
-  const tableName = await getTableName()
+  const tableName = await getTableName();
 
   // fetch data from db
   console.log(pc.blueBright("Fetching data from database"));
-  const data = await getTableData(client!, tableName)
+  const data = await getTableData(client!, tableName);
   // verify if table exist
 
   // ask location to save data at
-  const dir = await getDirectoryPath()
+  const dir = await getDirectoryPath();
 
   // save backup
-  await saveBackup(dir, tableName, data)
+  await saveBackup(dir, tableName, data);
 
   outro("Backup Completed");
   process.exit(1);
