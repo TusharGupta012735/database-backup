@@ -9,9 +9,26 @@ import { getConnectionString } from "../helper/getConnectionString";
 import pc from "picocolors";
 import { Client } from "pg";
 
-export async function establishConnection(databaseName : string) : Promise<Client>{
+type EstablishConnectionDeps = {
+  selectConnectionMethod: typeof select;
+  requestConnectionString: typeof getConnectionString;
+  requestDbCredentials: typeof getDbCredentials;
+  connect: typeof connectPostgres;
+};
+
+const defaultDeps: EstablishConnectionDeps = {
+  selectConnectionMethod: select,
+  requestConnectionString: getConnectionString,
+  requestDbCredentials: getDbCredentials,
+  connect: connectPostgres,
+};
+
+export async function establishConnection(
+  databaseName: string,
+  deps: EstablishConnectionDeps = defaultDeps,
+): Promise<Client> {
   try {
-    const inputType = await select({
+    const inputType = await deps.selectConnectionMethod({
       message: "Enter the connection method",
       options: connectionOptions,
     });
@@ -19,12 +36,12 @@ export async function establishConnection(databaseName : string) : Promise<Clien
     let client;
 
     if (inputType == "cs") {
-      const connectionString = await getConnectionString();
-      client = await connectPostgres(connectionString);
+      const connectionString = await deps.requestConnectionString();
+      client = await deps.connect(connectionString);
     } else {
-      const res = await getDbCredentials();
+      const res = await deps.requestDbCredentials();
       const connectionString = buildConnectionString(res, databaseName);
-      client = await connectPostgres(connectionString);
+      client = await deps.connect(connectionString);
     }
     if (client == null || client == undefined) {
       throw new Error("Error in establishing connection");
