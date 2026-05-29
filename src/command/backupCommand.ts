@@ -7,10 +7,12 @@ import { databasePackages } from "../constants/databasePackages";
 import { downloadDependecies } from "../helper/downloadDependecies";
 import { getDatabaseName } from "../helper/getDatabaseName";
 import { getTableName } from "../helper/getTableName";
-import { getTableData } from "../helper/getTableData";
 import { getDirectoryPath } from "../helper/getDirectory";
-import { saveBackup } from "../helper/saveBackup";
-import { establishConnection } from "../components/establishConnection";
+import { getConnectionString } from "../helper/getConnectionString";
+import {
+  buildBackupFilePath,
+  createCompressedTableBackup,
+} from "../helper/postgresBackupUtils";
 
 dotenv.config();
 
@@ -20,8 +22,14 @@ async function backupCommand() {
   // get database name
   const databaseName = await getDatabaseName();
 
-  // establish connection
-  const client = await establishConnection(databaseName);
+  if (databaseName !== "Postgres") {
+    console.log(
+      pc.redBright(
+        "Compressed utility-based backup is currently supported only for Postgres.",
+      ),
+    );
+    process.exit(0);
+  }
 
   // download dependency packages
   const packages = databasePackages[databaseName as string];
@@ -30,19 +38,17 @@ async function backupCommand() {
   // ask for table name to backup
   const tableName = await getTableName();
 
-  // fetch data from db
-  console.log(pc.blueBright("Fetching data from database"));
-  const data = await getTableData(client!, tableName);
-  // verify if table exist
-
   // ask location to save data at
   const dir = await getDirectoryPath();
+  const connectionString = await getConnectionString();
+  const backupFilePath = buildBackupFilePath(dir, tableName);
 
-  // save backup
-  await saveBackup(dir, tableName, data);
+  console.log(pc.blueBright("Creating compressed backup using pg_dump utility"));
+  await createCompressedTableBackup(connectionString, tableName, backupFilePath);
+  console.log(pc.greenBright(`Backup saved successfully at ${backupFilePath}`));
 
   outro("Backup Completed");
-  process.exit(1);
+  process.exit(0);
 }
 
 export default backupCommand;
