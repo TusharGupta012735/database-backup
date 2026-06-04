@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "node --loader ts-node/esm --test --test-reporter=spec \"test/**/*.test.ts\"",
+    "test": "TS_NODE_TRANSPILE_ONLY=true node --loader ts-node/esm --test --test-reporter=spec \"test/**/*.test.ts\"",
     "backup": "npx tsx src/index.ts backup",
     "restore": "npx tsx src/index.ts restore"
   },

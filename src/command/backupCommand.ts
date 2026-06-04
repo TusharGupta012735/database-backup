@@ -9,10 +9,20 @@ import { getDatabaseName } from "../helper/getDatabaseName";
 import { getTableName } from "../helper/getTableName";
 import { getDirectoryPath } from "../helper/getDirectory";
 import { getConnectionString } from "../helper/getConnectionString";
+import { getBackupType } from "../helper/getBackupType";
+import { getBackupMetadataPath, getWalArchivePath } from "../helper/getWalArchivePath";
+import { connectPostgres } from "../connection/postgres";
 import {
   buildBackupFilePath,
+  buildWalBackupPath,
   createCompressedTableBackup,
+  createFullPostgresBackup,
+  createWalArchiveBackup,
+  getCurrentWalFile,
+  readWalBackupMetadata,
 } from "../helper/postgresBackupUtils";
+
+import type { Client } from "pg";
 
 dotenv.config();
 
@@ -35,18 +45,54 @@ async function backupCommand() {
   const packages = databasePackages[databaseName as string];
   await downloadDependecies(packages);
 
-  // ask for table name to backup
-  const tableName = await getTableName();
-
-  // ask location to save data at
+  const backupType = await getBackupType();
   const dir = await getDirectoryPath();
   const connectionString = await getConnectionString();
-  const backupFilePath = buildBackupFilePath(dir, tableName);
 
-  console.log(pc.blueBright("Creating compressed backup using pg_dump utility"));
-  await createCompressedTableBackup(connectionString, tableName, backupFilePath);
-  console.log(pc.greenBright(`Backup saved successfully at ${backupFilePath}`));
+  if (backupType === "table") {
+    // ask for table name to backup
+    const tableName = await getTableName();
+    const backupFilePath = buildBackupFilePath(dir, tableName);
 
+    console.log(pc.blueBright("Creating compressed backup using pg_dump utility"));
+    await createCompressedTableBackup(connectionString, tableName, backupFilePath);
+    console.log(pc.greenBright(`Backup saved successfully at ${backupFilePath}`));
+
+    outro("Backup Completed");
+    process.exit(0);
+  }
+
+  const backupPath = buildWalBackupPath(dir, backupType);
+  const client = await connectPostgres(connectionString) as Client;
+
+  try {
+    const currentWalFile = await getCurrentWalFile(client);
+
+    if (backupType === "full") {
+      console.log(pc.blueBright("Creating full PostgreSQL base backup using pg_basebackup"));
+      await createFullPostgresBackup(connectionString, backupPath, currentWalFile);
+    } else {
+      const walArchivePath = await getWalArchivePath();
+      const metadataPath = await getBackupMetadataPath();
+      const baseMetadata = await readWalBackupMetadata(metadataPath);
+
+      console.log(
+        pc.blueBright(`Creating ${backupType} PostgreSQL backup from WAL archive`),
+      );
+      await createWalArchiveBackup(
+        backupType,
+        connectionString,
+        backupPath,
+        walArchivePath,
+        currentWalFile,
+        baseMetadata,
+      );
+    }
+  } finally {
+    await client.end();
+  }
+
+  console.log(pc.greenBright(`Backup saved successfully at ${backupPath}`));
   outro("Backup Completed");
   process.exit(0);
 }

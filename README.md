@@ -3,7 +3,7 @@
 ### Project URL :
 https://roadmap.sh/projects/database-backup-utility
 
-A small CLI utility for backing up and restoring table data as JSON. The project is currently focused on **PostgreSQL**, with placeholders for MongoDB and Cassandra support in the future.
+A small CLI utility for backing up and restoring PostgreSQL data. The project supports compressed table dumps plus PostgreSQL physical full, incremental, and differential backup workflows when WAL archiving is already enabled and available from a local or mounted archive directory.
 
 ## Repository
 
@@ -15,26 +15,32 @@ This tool helps you:
 
 - Select the database type from the CLI
 - Enter a PostgreSQL connection string
-- Choose a table to export
-- Choose the directory where the backup JSON file should be saved
-- Restore JSON backup data back into PostgreSQL
+- Choose a backup type
+- Create a compressed table-level dump with `pg_dump`
+- Create a full physical base backup with `pg_basebackup`
+- Create incremental or differential WAL archive backups from an existing full backup metadata file
+- Choose the directory where backup artifacts should be saved
+- Restore compressed custom-format dumps with `pg_restore`
 
-The current implementation stores table rows as a JSON array and uses the `pg` driver to connect to PostgreSQL.
+The active implementation is focused on **PostgreSQL**, with placeholders for MongoDB and Cassandra support in the future.
 
 ## Current status
 
 ### Working today
 
 - Backup flow for **PostgreSQL**
-- Restore flow for **PostgreSQL**
+- Restore flow for **PostgreSQL** compressed dumps
 - Interactive CLI prompts using `@clack/prompts`
-- JSON file creation and restore execution
+- Compressed table backups using `pg_dump --format=custom`
+- Full physical PostgreSQL backups using `pg_basebackup`
+- WAL-archive incremental backups that copy archived WAL files since the previous full or incremental backup
+- WAL-archive differential backups that copy archived WAL files since the previous full backup
 
 ### Still planned / future work
 
 - MongoDB and Cassandra are listed as selectable options, but their connection and restore logic are not implemented yet
-- `fs-extra` is currently unused
 - `.env` support is not yet wired into the restore flow
+- Physical recovery orchestration for full + WAL backup chains is not yet automated
 
 ## Project structure
 
@@ -42,6 +48,9 @@ The current implementation stores table rows as a JSON array and uses the `pg` d
 - `src/command/backupCommand.ts` – backup workflow
 - `src/command/restoreCommand.ts` – restore workflow
 - `src/connection/postgres.ts` – PostgreSQL connection logic
+- `src/helper/postgresBackupUtils.ts` – PostgreSQL dump, base backup, WAL archive backup, and metadata helpers
+- `src/helper/getBackupType.ts` – prompt for table, full, incremental, or differential backups
+- `src/helper/getWalArchivePath.ts` – prompts for WAL archive and previous metadata paths
 - `src/helper/*.ts` – prompt helpers, directory selection, file writing, and database-specific utilities
 - `src/constants/*.ts` – database list and package mappings
 
@@ -51,7 +60,7 @@ The current implementation stores table rows as a JSON array and uses the `pg` d
 
 - `@clack/prompts` – interactive CLI prompts
 - `dotenv` – loads environment variables from `.env`
-- `execa` – runs shell commands such as `npm install`
+- `execa` – runs shell commands such as `pg_dump`, `pg_restore`, `pg_basebackup`, and `npm install`
 - `fs-extra` – present in the package but not currently used by the active logic
 - `pg` – PostgreSQL client driver
 - `picocolors` – colored terminal output
@@ -85,6 +94,89 @@ The current implementation stores table rows as a JSON array and uses the `pg` d
    npm run restore
    ```
 
+## PostgreSQL backup types
+
+### Table dump
+
+Creates one compressed custom-format table backup with `pg_dump`.
+
+Output file:
+
+```text
+backup_<table_name>.dump
+```
+
+This is the best option when you need a portable logical backup of one table.
+
+### Full backup
+
+Creates a physical PostgreSQL base backup with `pg_basebackup` and writes metadata next to the backup artifacts.
+
+The command uses:
+
+```text
+pg_basebackup --format=tar --gzip --wal-method=fetch
+```
+
+Output directory example:
+
+```text
+full_2026-06-04T12-00-00-000Z/
+  base.tar.gz
+  postgres-backup-metadata.json
+```
+
+The metadata records the current WAL file at backup time. Incremental and differential backups use that marker to decide which archived WAL files to copy.
+
+### Incremental backup
+
+Creates a WAL-only backup by copying files from the configured WAL archive directory. Incremental backups start from the `currentWalFile` in the previous full or incremental backup metadata and copy through the server's current WAL file.
+
+Use this when you want a backup containing only WAL generated since the latest backup in the chain.
+
+Required prompts:
+
+- PostgreSQL connection string
+- Backup output directory
+- Local or mounted WAL archive directory
+- Previous backup metadata file or directory
+
+### Differential backup
+
+Creates a WAL-only backup by copying files from the configured WAL archive directory. Differential backups start from the `fullBackupWalFile` in the previous full backup metadata and copy through the server's current WAL file.
+
+Use this when you want each differential backup to be restorable with the original full backup without applying earlier incrementals.
+
+Required prompts:
+
+- PostgreSQL connection string
+- Backup output directory
+- Local or mounted WAL archive directory
+- Previous full backup metadata file or directory
+
+## WAL archive requirements
+
+Incremental and differential backup options assume PostgreSQL WAL archiving is already enabled on the database server and that archived WAL files are readable from the machine running this CLI. For example, the archive may be mounted locally from network storage.
+
+The utility does not enable PostgreSQL archive mode for you. It copies files from the archive directory whose names fall between the stored backup WAL marker and the current WAL file reported by PostgreSQL.
+
+Each full, incremental, and differential backup writes:
+
+```text
+postgres-backup-metadata.json
+```
+
+That metadata file tracks:
+
+- Backup type
+- Creation time
+- Backup path
+- WAL archive path for WAL-only backups
+- Full backup WAL marker
+- Previous WAL marker
+- Current WAL marker
+- Copied WAL file names
+
 ## How the backup flow works
 
 ### 1. CLI startup
@@ -109,162 +201,67 @@ Current package mapping:
 - `MongoDb` → `mongoose`
 - `Cassandra` → `cassandra-driver`
 
-### 4. Connection establishment
+### 4. Backup type selection
+
+`getBackupType()` asks whether to create a table dump, full backup, incremental backup, or differential backup.
+
+### 5. Connection setup
 
 `getConnectionString()` asks the user to enter a PostgreSQL connection string.
 
-`connectPostgres()` in `src/connection/postgres.ts` then:
-
-- creates a new `Client` from `pg`
-- passes the connection string
-- sets `ssl.rejectUnauthorized = false`
-- connects using `await client.connect()`
-- verifies the connection with `SELECT now()`
-
-If the connection fails, the process exits.
-
-### 5. Table selection
-
-`getTableName()` asks the user to enter the table name to export.
-
-### 6. Fetching table data
-
-`getTableData()` runs:
+For WAL-aware backup modes, `connectPostgres()` opens a PostgreSQL connection and `getCurrentWalFile()` runs:
 
 ```sql
-SELECT * FROM <table_name>
+SELECT pg_walfile_name(pg_current_wal_lsn()) AS wal_file
 ```
 
-and returns the rows as JSON-serializable objects.
+### 6. Backup execution
 
-### 7. Output directory selection
+Depending on the selected backup type:
 
-`getDirectoryPath()` asks the user to provide an absolute path where the backup should be saved.
-
-### 8. Saving the backup
-
-`saveBackup()` creates the directory if needed and writes a file named:
-
-```text
-backup_<table_name>.json
-```
-
-The file contains a JSON array of rows. For example:
-
-```json
-[
-  {
-    "order_id": 1,
-    "user_id": 1,
-    "product_id": 1,
-    "quantity": 1,
-    "order_date": "2026-05-22T06:56:31.045Z"
-  }
-]
-```
+- Table dump: runs `pg_dump` for the selected table
+- Full backup: runs `pg_basebackup`
+- Incremental backup: copies archived WAL files since the previous backup metadata marker
+- Differential backup: copies archived WAL files since the full backup metadata marker
 
 ## How the restore flow works
 
-The restore flow is now implemented in `src/command/restoreCommand.ts`.
+The restore flow is implemented in `src/command/restoreCommand.ts`.
 
 ### Restore steps
 
 1. Ask the user to select the database
 2. Download database-specific dependencies
 3. Ask for the PostgreSQL connection string
-4. Connect to PostgreSQL
-5. Ask for the backup file path
-6. Read and parse the JSON backup file
-7. Validate that the data is not empty
-8. For each row:
-   - build an `INSERT ... ON CONFLICT (user_id) DO UPDATE` query
-   - insert the row values into the target table
-9. Close the PostgreSQL client
-10. Print a success message
+4. Ask for the backup file path
+5. Run `pg_restore --clean --if-exists --no-owner`
+6. Print a success message
 
 ### Restore behavior
 
-For PostgreSQL, the current restore logic:
-
-- uses `user_id` as the conflict target
-- updates all fields except `user_id`
-- performs one insert/update per row in the backup file
-- restores data into the table entered by the user during the prompt
-
-### Example restore logic
-
-```sql
-INSERT INTO <table_name> (columns...)
-VALUES (...)
-ON CONFLICT (user_id)
-DO UPDATE SET
-  column_a = EXCLUDED.column_a,
-  column_b = EXCLUDED.column_b
-```
-
-## Connection and storage details
-
-### PostgreSQL connection details
-
-The current connection flow uses:
-
-- `pg.Client`
-- `connectionString` from user input
-- `ssl.rejectUnauthorized = false`
-
-This means the tool currently expects a valid PostgreSQL connection string and does not yet use `.env` automatically for restore connection setup.
-
-### Backup storage format
-
-Backups are written as JSON files, not SQL dumps.
-
-This makes the data easy to inspect, copy, and move, but it also means:
-
-- restore logic must understand the JSON shape
-- insert behavior must match the target table schema
-- the caller must ensure the backup matches the destination table structure
-
-## Support for future databases
-
-The project already includes placeholders for:
-
-- `MongoDB`
-- `Cassandra`
-
-The current codebase is **Postgres-first**, and future work should add:
-
-1. A database adapter layer
-2. A connector per database
-3. A restore strategy per database
-4. A shared backup metadata format
-
-A clean future design would be:
-
-- `src/connection/postgres.ts`
-- `src/connection/mongodb.ts`
-- `src/connection/cassandra.ts`
-- a shared `backupService` interface for table exports and restores
+For PostgreSQL, the current restore logic restores compressed custom-format dump files created by the table dump option. Full physical backup and WAL replay recovery still require PostgreSQL recovery tooling outside this CLI.
 
 ## Current limitations
 
-- `fs-extra` is present in `package.json` but not used in the current code
-- `.env` is not yet used automatically for restore connection setup
-- `MongoDB` and `Cassandra` are not functionally implemented yet
-- The restore conflict target is currently hardcoded to `user_id`
+- MongoDB and Cassandra are not functionally implemented yet
+- The restore command currently handles compressed custom-format dumps, not full physical recovery chains
+- Incremental and differential backups require a readable local or mounted WAL archive directory
+- Incremental and differential backups depend on metadata generated by this tool
+- The utility does not configure `archive_mode` or `archive_command` on PostgreSQL
 
 ## Suggested next improvements
 
-1. Add a proper `.env`-based connection configuration flow
-2. Add table existence validation before restore
-3. Add file validation for backup JSON structure
-4. Add transaction handling for safer restores
-5. Implement database adapters for MongoDB and Cassandra
-6. Add a metadata header to each backup file (source DB, table, timestamp, row count)
-7. Add tests for backup and restore behavior
+1. Add automated restore orchestration for full + WAL backup chains
+2. Add validation that the supplied WAL archive contains every required segment
+3. Add timeline-aware WAL chain validation for point-in-time recovery
+4. Add table existence validation before table dump restore
+5. Add a proper `.env`-based connection configuration flow
+6. Implement database adapters for MongoDB and Cassandra
+7. Add metadata checksums for backup integrity validation
 
-## Example workflow
+## Example workflows
 
-### Backup
+### Table backup
 
 ```bash
 npm run backup
@@ -273,12 +270,59 @@ npm run backup
 CLI flow:
 
 1. Select `Postgres`
-2. Enter your PostgreSQL connection string
-3. Enter the table name
-4. Enter an absolute directory path
-5. The tool saves `backup_<table>.json`
+2. Select `Table dump`
+3. Enter an absolute directory path
+4. Enter your PostgreSQL connection string
+5. Enter the table name
+6. The tool saves `backup_<table>.dump`
 
-### Restore
+### Full backup
+
+```bash
+npm run backup
+```
+
+CLI flow:
+
+1. Select `Postgres`
+2. Select `Full backup`
+3. Enter an absolute directory path
+4. Enter your PostgreSQL connection string
+5. The tool saves a `full_<timestamp>` directory with `pg_basebackup` output and metadata
+
+### Incremental backup
+
+```bash
+npm run backup
+```
+
+CLI flow:
+
+1. Select `Postgres`
+2. Select `Incremental backup`
+3. Enter an absolute directory path
+4. Enter your PostgreSQL connection string
+5. Enter the WAL archive directory
+6. Enter the previous full or incremental backup metadata path
+7. The tool saves an `incremental_<timestamp>` directory with copied WAL files and metadata
+
+### Differential backup
+
+```bash
+npm run backup
+```
+
+CLI flow:
+
+1. Select `Postgres`
+2. Select `Differential backup`
+3. Enter an absolute directory path
+4. Enter your PostgreSQL connection string
+5. Enter the WAL archive directory
+6. Enter the previous full backup metadata path
+7. The tool saves a `differential_<timestamp>` directory with copied WAL files and metadata
+
+### Restore compressed table dump
 
 ```bash
 npm run restore
@@ -289,10 +333,9 @@ CLI flow:
 1. Select `Postgres`
 2. Enter your PostgreSQL connection string
 3. Enter the backup file path
-4. Enter the target table name
-5. The tool parses the JSON and restores the rows
-6. The tool prints `Database restored succesfully`
+4. The tool runs `pg_restore`
+5. The tool prints `Database restored succesfully`
 
 ## Notes
 
-This project is currently designed for **PostgreSQL only**, and the codebase is already structured to expand toward other databases in the future. The restore flow is now active for PostgreSQL, while the future database support remains a planned extension.
+This project is currently designed for **PostgreSQL only**, and the codebase is structured to expand toward other databases in the future. WAL-aware incremental and differential backup options now exist for PostgreSQL installations that already archive WAL files, while physical recovery automation remains a future enhancement.
